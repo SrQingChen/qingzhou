@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path
+        name="logs"
+        path="logs/" />
+    <cache-path
+        name="cache"
+        path="send_src/" />
+    <!-- 收件箱“打开”：低版本回退保存的接收文件位于应用外部 Download/QingZhou -->
+    <external-files-path
+        name="received"
+        path="Download/QingZhou/" />
+</paths>
