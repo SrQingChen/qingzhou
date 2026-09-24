@@ -72,7 +72,13 @@ object UsbAccessoryLink {
     private var pfd: ParcelFileDescriptor? = null
 
     @Volatile
-    private var writeStream: FileOutputStream? = null
+    private var linkInput: InputStream? = null
+
+    @Volatile
+    private var linkOutput: OutputStream? = null
+
+    @Volatile
+    private var linkCloser: (() -> Unit)? = null
 
     /** 接收循环宿主（由 FileTransferEngine 注册入流处理器）。 */
     @Volatile
@@ -89,9 +95,14 @@ object UsbAccessoryLink {
         val br = object : BroadcastReceiver() {
             override fun onReceive(c: Context?, intent: Intent?) {
                 when (intent?.action) {
-                    UsbManager.ACTION_USB_DEVICE_ATTACHED, UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                        QzLog.i(TAG, "USB 设备插拔 → 尝试建立 accessory 链路")
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                        QzLog.i(TAG, "USB 设备插入 → 尝试建立 accessory 链路")
                         tryConnectAsHost()
+                    }
+
+                    UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                        QzLog.i(TAG, "USB 设备拔出 → 关闭 accessory/bulk 链路")
+                        closeLink("device detached")
                     }
 
                     UsbManager.ACTION_USB_ACCESSORY_ATTACHED -> tryConnectAsAccessory()
@@ -128,16 +139,17 @@ object UsbAccessoryLink {
     }
 
     /** 发送侧取写流（纯写设计：不触碰读端）。无链路返回 null，调用方优雅降级。 */
-    fun obtainSendStream(): OutputStream? = writeStream
+    fun obtainSendStream(): OutputStream? = linkOutput
 
     // ---------- Host 侧 ----------
 
     /**
      * Host 侧主流程（幂等）：
-     * ① 对端已处于 accessory 模式且有权限 → 直接打开；
+     * ① 对端已处于 accessory 模式且有权限 → 打开（优先 UsbRequest 异步 bulk 队列，失败回退 fd）；
      * ② 有 accessory 无权限 → 申请 accessory 权限；
      * ③ 对端是普通手机且有设备权限 → 发 accessory 切换请求（等重枚举）；
      * ④ 普通手机无权限 → 申请设备权限（回调后回到本函数）。
+     * NCM/RNDIS 网络设备一律跳过切换（对端已被协商切换为 usb0 网卡，切换请求会杀掉它）。
      */
     private fun tryConnectAsHost() {
         val ctx = appContext ?: return
@@ -147,13 +159,20 @@ object UsbAccessoryLink {
             val acc = usb.accessoryList?.firstOrNull()
             if (acc != null) {
                 if (usb.hasPermission(acc)) {
-                    usb.openAccessory(acc)?.let { bind(it, asHost = true) }
+                    // D6：Host 侧优先 claimInterface + UsbRequest 异步队列（吞吐/CPU 双优），失败回退 fd
+                    if (!tryBindBulkAsHost(ctx, usb)) {
+                        usb.openAccessory(acc)?.let { bindFd(it, asHost = true) }
+                    }
                 } else {
                     requestPermission(ctx, usb, null)
                 }
                 return
             }
             val device = usb.deviceList.values.firstOrNull { it.vendorId != GOOG_VID } ?: return
+            if (isNetworkGadget(device)) {
+                QzLog.i(TAG, "对端为 USB 网络设备（NCM/RNDIS），AOA 侧让位 usb0 链路")
+                return
+            }
             if (usb.hasPermission(device)) {
                 val conn = usb.openDevice(device) ?: return
                 val ok = sendSwitchRequest(conn)
@@ -167,6 +186,48 @@ object UsbAccessoryLink {
             }
         }.onFailure { QzLog.d(TAG, "Host 侧探测失败（静默降级）：${it.message}") }
     }
+
+    /** 网络设备判定：CDC-Control(0x02) / CDC-Data(0x0A) / RNDIS IAD(MISC 0xEF) / vendor-NCM(0xFF/0x0D)。 */
+    private fun isNetworkGadget(d: UsbDevice): Boolean {
+        for (i in 0 until d.interfaceCount) {
+            val iface = d.getInterface(i)
+            if (iface.interfaceClass == 0x02 || iface.interfaceClass == 0x0A) return true
+            if (iface.interfaceClass == 0xEF && iface.interfaceSubclass == 0x02) return true
+            if (iface.interfaceClass == 0xFF && iface.interfaceSubclass == 0x0D) return true
+        }
+        return false
+    }
+
+    /** Host 侧 bulk 异步通道（UsbBulkChannel）：找到双 bulk 端点的接口并接管；失败回 false。 */
+    private fun tryBindBulkAsHost(ctx: Context, usb: UsbManager): Boolean = runCatching {
+        val dev = usb.deviceList.values.firstOrNull {
+            it.vendorId == GOOG_VID && (it.productId == ACC_PID_1 || it.productId == ACC_PID_2)
+        } ?: return false
+        if (!usb.hasPermission(dev)) {
+            requestPermission(ctx, usb, dev)
+            return false
+        }
+        val conn = usb.openDevice(dev) ?: return false
+        for (i in 0 until dev.interfaceCount) {
+            val iface = dev.getInterface(i)
+            var outEp: UsbEndpoint? = null
+            var inEp: UsbEndpoint? = null
+            for (e in 0 until iface.endpointCount) {
+                val ep = iface.getEndpoint(e)
+                if (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                    if (ep.direction == UsbConstants.USB_DIR_OUT) outEp = ep else inEp = ep
+                }
+            }
+            if (outEp != null && inEp != null && conn.claimInterface(iface, true)) {
+                val channel = UsbBulkChannel(conn, outEp, inEp)
+                bind(channel.source, channel.sink, asHost = true) { channel.close("rebind/detach") }
+                channel.start()
+                return true
+            }
+        }
+        conn.close()
+        false
+    }.getOrDefault(false)
 
     private fun requestPermission(ctx: Context, usb: UsbManager, switchTarget: UsbDevice?) {
         val pi = PendingIntent.getBroadcast(
@@ -224,7 +285,7 @@ object UsbAccessoryLink {
         runCatching {
             val acc = usb.accessoryList?.firstOrNull() ?: return
             if (usb.hasPermission(acc)) {
-                usb.openAccessory(acc)?.let { bind(it, asHost = false) }
+                usb.openAccessory(acc)?.let { bindFd(it, asHost = false) }
             } else {
                 // accessory 权限一般由 attach 弹窗授予；这里补请求
                 requestPermission(ctx, usb, null)
@@ -234,30 +295,47 @@ object UsbAccessoryLink {
 
     // ---------- fd 生命周期 ----------
 
-    private fun bind(p: ParcelFileDescriptor, asHost: Boolean) {
+    /** fd 版链路（accessory 侧 / host 侧 bulk 失败回退）。 */
+    private fun bindFd(p: ParcelFileDescriptor, asHost: Boolean) {
+        bind(
+            FileInputStream(p.fileDescriptor),
+            FileOutputStream(p.fileDescriptor),
+            asHost,
+        ) { runCatching { p.close() } }
+        pfd = p
+    }
+
+    /**
+     * 通用链路绑定（fd 流或 bulk 异步通道）。
+     * 常驻接收循环：读端独占（发送 sink 纯写，不冲突）；close 由 [closer] 负责。
+     */
+    private fun bind(input: InputStream, output: OutputStream, asHost: Boolean, closer: () -> Unit) {
         if (attached) {
-            runCatching { p.close() }
+            closer()
             return
         }
-        pfd = p
-        writeStream = FileOutputStream(p.fileDescriptor)
+        linkInput = input
+        linkOutput = output
+        linkCloser = closer
         _state.value = UsbState.Connected(asHost)
-        QzLog.i(TAG, "USB accessory 链路已建立（${if (asHost) "Host" else "Accessory"} 侧，fd=${p.fd}")
-        // 常驻接收循环：读端独占（发送 sink 纯写，不冲突）
+        QzLog.i(TAG, "USB accessory 链路已建立（${if (asHost) "Host" else "Accessory"} 侧，${output.javaClass.simpleName}）")
         val listener = sinkListener
         if (listener != null) {
             scope?.launch {
-                runCatching { listener(FileInputStream(p.fileDescriptor)) }
+                runCatching { listener(input) }
                 QzLog.i(TAG, "USB 接收循环结束")
             }
         }
     }
 
     private fun closeLink(reason: String) {
-        runCatching { writeStream?.flush() }
+        runCatching { (linkOutput as? FileOutputStream)?.flush() }
+        runCatching { linkCloser?.invoke() }
         runCatching { pfd?.close() }
         pfd = null
-        writeStream = null
+        linkInput = null
+        linkOutput = null
+        linkCloser = null
         _state.value = UsbState.Detached
         QzLog.i(TAG, "USB 链路已关闭（$reason）")
     }

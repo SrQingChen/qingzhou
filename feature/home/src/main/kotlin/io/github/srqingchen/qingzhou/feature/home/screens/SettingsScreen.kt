@@ -75,6 +75,12 @@ fun SettingsScreen(modifier: Modifier = Modifier, context: android.content.Conte
                     checked = settings.usbEnabled,
                     onChecked = { v -> SettingsStore.update { it.copy(usbEnabled = v) } },
                 )
+                SettingSwitch(
+                    title = "USB 网络链路 NCM（需 Shizuku）",
+                    subtitle = "经 Shizuku 把 USB 切为 NCM 网卡（USB3 机型可远超 AOA），多流并入并行；仅与对端协商确认后启用，拔线自动还原",
+                    checked = settings.usbNetEnabled,
+                    onChecked = { v -> SettingsStore.update { it.copy(usbNetEnabled = v) } },
+                )
             }
         }
 

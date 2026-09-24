@@ -47,6 +47,8 @@ object Cap {
     const val FILE = 2
     const val P2P = 4
     const val USB = 8 // 有线并行（AOA）：双端新版且 USB 已连接才启用
+    const val USB_NET = 16 // USB 网络链路（NCM/usb0，经 Shizuku 协商切换）
+    const val V2 = 32 // 舟协议 v2（MPLB：租约调度 + SACK + 补发 + 每链路信用）
 }
 
 /**

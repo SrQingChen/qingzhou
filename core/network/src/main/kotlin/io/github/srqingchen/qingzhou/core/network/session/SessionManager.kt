@@ -493,7 +493,9 @@ object SessionManager {
             messagePort = Protocol.PORT_MESSAGE,
             capabilities = io.github.srqingchen.qingzhou.core.model.Cap.TEXT
                 or io.github.srqingchen.qingzhou.core.model.Cap.FILE
-                or io.github.srqingchen.qingzhou.core.model.Cap.USB,
+                or io.github.srqingchen.qingzhou.core.model.Cap.USB
+                or io.github.srqingchen.qingzhou.core.model.Cap.USB_NET
+                or io.github.srqingchen.qingzhou.core.model.Cap.V2,
             timestamp = System.currentTimeMillis(),
         )
     }

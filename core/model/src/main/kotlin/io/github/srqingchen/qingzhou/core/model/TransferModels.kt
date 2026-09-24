@@ -5,8 +5,9 @@ package io.github.srqingchen.qingzhou.core.model
 data class FileMeta(
     val name: String,
     val size: Long,
-    val sha256: String, // 全文件 SHA-256（发送前计算/接收后校验）
+    val sha256: String, // 全文件 SHA-256（发送前计算/接收后校验；v2 零暂存源在发送后经 fileHashes 送达）
     val mimeType: String? = null,
+    val mtimeEpoch: Long? = null, // 修改时间（v2 零暂存 token 派生用）
 )
 
 enum class TransferDirection { SEND, RECV }

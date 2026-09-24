@@ -32,13 +32,25 @@ object WifiLocks {
         }
     }
 
-    /** 传输期间：高性能优先（吞吐稳定）。 */
+    /**
+     * 传输期间：低延迟档。
+     * D8 修正：WIFI_MODE_FULL_HIGH_PERF 已被官方废弃，新 ROM 一律静默映射为
+     * WIFI_MODE_FULL_LOW_LATENCY（javadoc 明言 *Throughput may be reduced*）——
+     * 与其依赖一个语义漂移的常量，不如显式使用同一映射并在此留档；
+     * 真机若观察到吞吐受限，唯一 root 级出路是 cmd wifi force-hi-perf-mode（见 docs/04 §2.3）。
+     */
     @Synchronized
     fun holdTransfer(context: Context) {
         if (transferLock != null) return
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             ?: return
-        transferLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "qz:transfer").apply {
+        val mode = if (Build.VERSION.SDK_INT >= 29) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION")
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        transferLock = wifi.createWifiLock(mode, "qz:transfer").apply {
             setReferenceCounted(false)
             runCatching { acquire() }
                 .onFailure { QzLog.w("wifilock", "传输锁获取失败：${it.message}") }

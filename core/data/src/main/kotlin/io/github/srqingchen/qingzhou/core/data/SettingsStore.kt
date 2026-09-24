@@ -32,6 +32,7 @@ data class QzSettings(
     val islandCompat: Boolean = false, // 超级岛兼容模式（需 Shizuku + 用户知情）
     val bleEnabled: Boolean = false,
     val usbEnabled: Boolean = true, // 有线+WiFi 并行（AOA），探测即用、失败静默降级
+    val usbNetEnabled: Boolean = true, // USB 网络链路（NCM/usb0，经 Shizuku；协商确认后才切换）
     val parallelStreams: Int = 4,
     val chunkSizeMiB: Int = 4,
 ) {
@@ -83,6 +84,7 @@ object SettingsStore {
                     islandCompat = json.optBoolean("islandCompat", false),
                     bleEnabled = json.optBoolean("ble", false),
                     usbEnabled = json.optBoolean("usb", true),
+                    usbNetEnabled = json.optBoolean("usbNet", true),
                     parallelStreams = json.optInt("streams", 4).coerceIn(1, 8),
                     chunkSizeMiB = json.optInt("chunk", 4).coerceIn(1, 16),
                 )
@@ -108,6 +110,7 @@ object SettingsStore {
                     .put("islandCompat", cur.islandCompat)
                     .put("ble", cur.bleEnabled)
                     .put("usb", cur.usbEnabled)
+                    .put("usbNet", cur.usbNetEnabled)
                     .put("streams", cur.parallelStreams)
                     .put("chunk", cur.chunkSizeMiB)
                 runCatching { f.writeText(json.toString()) }

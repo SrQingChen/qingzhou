@@ -178,7 +178,7 @@ object DiscoveryEngine {
             apiLevel = android.os.Build.VERSION.SDK_INT,
             controlPort = Protocol.PORT_CONTROL,
             messagePort = Protocol.PORT_MESSAGE,
-            capabilities = Cap.TEXT or Cap.FILE or Cap.USB,
+            capabilities = Cap.TEXT or Cap.FILE or Cap.USB or Cap.USB_NET or Cap.V2,
             timestamp = System.currentTimeMillis(),
         )
     }

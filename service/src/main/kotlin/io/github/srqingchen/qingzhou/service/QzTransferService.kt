@@ -107,11 +107,14 @@ class QzTransferService : LifecycleService() {
     private fun startInForeground() {
         val notification = buildReceiveNotification(this)
         if (Build.VERSION.SDK_INT >= 29) {
+            // connectedDevice：USB 外设交互恰符合该类型语义（docs/04 §2.3 FGS 建议）；
+            // dataSync 兜底并存 —— A15 起 dataSync 6h/24h 配额超时会被系统强停。
             ServiceCompat.startForeground(
                 this,
                 NOTIF_ID_RECEIVE,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
             )
         } else {
             startForeground(NOTIF_ID_RECEIVE, notification)
